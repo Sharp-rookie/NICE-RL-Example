@@ -2,6 +2,7 @@ import gym
 import time
 
 from PPO import PPO
+from utils import Visualizer
 
 
 #################################### Testing ###################################
@@ -25,6 +26,10 @@ def test():
 
     lr_actor = 0.0003           # learning rate for actor
     lr_critic = 0.001           # learning rate for critic
+
+    use_vis = False
+    vis_env = env_name
+    port = 8097
     #####################################################
 
     env = gym.make(env_name)
@@ -56,6 +61,11 @@ def test():
 
     test_running_reward = 0
 
+    # visualization
+    if use_vis:
+        vis = Visualizer(vis_env, port=port)
+
+    step = 0
     for ep in range(1, total_test_episodes+1):
         ep_reward = 0
         state = env.reset()
@@ -71,6 +81,14 @@ def test():
 
             if done:
                 break
+
+            step += 1
+            # Visualize
+            if step % 1 == 0:
+                vis.plot(win='Offset', name='GBR', y=env.bucket.offset)
+                vis.plot(win='reservedPRB', name='GBR', y=env.bucket.reservedPRB)
+                vis.plot(win='Reward', name='GBR', y=reward)
+                vis.plot(win='Delay', name='GBR', y=env.bucket.delay)
 
         # clear buffer
         ppo_agent.buffer.clear()
