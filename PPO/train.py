@@ -35,6 +35,9 @@ def train():
     gamma = 0.99            # discount factor
 
     # agent θ' 与环境每交互若干轮，agent θ就训练多次
+    # 注意：如果应用的环境是没有terminal的，那么update_timestep必须等于max_episode_timesteps，即每探索一个回合就要更新
+    # 这是因为更新时需要用蒙特卡洛法迭代计算动作价值，而如果环境是永不停止的那种，即没有termial，那么如果探索多轮后放一起迭代会导致
+    # 每轮数据间没有terminal状态隔开，进行连续迭代而没有中断，从原理上导致动作价值计算错误！！！
     update_timestep = max_episode_timesteps * 4    # update policy every n timesteps
     K_epochs = 80                                  # update policy for K epochs in one PPO update
 
@@ -212,12 +215,14 @@ def train():
 
             # save model weights
             if time_step % save_model_freq == 0:
+                checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
                 print("--------------------------------------------------------------------------------------------")
                 print("saving model at : " + checkpoint_path)
                 ppo_agent.save(checkpoint_path)
                 print("model saved")
                 print("Elapsed Time  : ", datetime.now().replace(microsecond=0) - start_time)
                 print("--------------------------------------------------------------------------------------------")
+                run_num_pretrained += 1
 
             # break; if the episode is over
             if done:
