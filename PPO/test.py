@@ -83,6 +83,7 @@ def test():
                 break
 
             step += 1
+            
             # Visualize
             if step % 1 == 0:
                 vis.plot(win='Offset', name='GBR', y=env.bucket.offset)
