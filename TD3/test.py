@@ -13,7 +13,7 @@ def test():
     
     filename = "TD3_{}_{}".format(env_name, random_seed)
     filename += '_solved'
-    directory = "./preTrained/{}".format(env_name)
+    checkpoint_path = 'xxx'
     
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
@@ -22,7 +22,7 @@ def test():
     
     policy = TD3(lr, state_dim, action_dim, max_action)
     
-    policy.load_actor(directory, filename)
+    policy.load_actor(checkpoint_path)
     
     for ep in range(1, n_episodes+1):
         ep_reward = 0

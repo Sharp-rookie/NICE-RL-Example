@@ -21,7 +21,7 @@ else:
 print("============================================================================================")
 
 
-################################## TD3 Policy ##################################
+################################## DDPG Policy ##################################
 class ReplayBuffer:
     def __init__(self, max_size=5e5):
         self.buffer = []
@@ -89,7 +89,7 @@ class Critic(nn.Module):
         q = self.l3(q)
         return q
     
-class TD3:
+class DDPG:
     def __init__(self, lr, state_dim, action_dim, max_action):
         
         self.actor = Actor(state_dim, action_dim, max_action).to(device)
@@ -97,28 +97,24 @@ class TD3:
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
         
-        self.critic_1 = Critic(state_dim, action_dim).to(device)
-        self.critic_1_target = Critic(state_dim, action_dim).to(device)
-        self.critic_1_target.load_state_dict(self.critic_1.state_dict())
-        self.critic_1_optimizer = optim.Adam(self.critic_1.parameters(), lr=lr)
-        
-        self.critic_2 = Critic(state_dim, action_dim).to(device)
-        self.critic_2_target = Critic(state_dim, action_dim).to(device)
-        self.critic_2_target.load_state_dict(self.critic_2.state_dict())
-        self.critic_2_optimizer = optim.Adam(self.critic_2.parameters(), lr=lr)
+        self.critic = Critic(state_dim, action_dim).to(device)
+        self.critic_target = Critic(state_dim, action_dim).to(device)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
         
         self.max_action = max_action
-        self.update_t = 0
     
     def select_action(self, state):
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         return self.actor(state).cpu().data.numpy().flatten()
     
-    def update(self, replay_buffer, n_iter, batch_size, gamma, polyak, policy_noise, noise_clip, policy_delay):
+    def update(self, replay_buffer, n_iter, batch_size, gamma, polyak):
         
         for _ in range(n_iter):
             
-            # Sample a batch of transitions from replay buffer:
+            ####################
+            # Sample a batch
+            ####################
             state, action_, reward, next_state, done = replay_buffer.sample(batch_size)
             state = torch.FloatTensor(state).to(device)
             action = torch.FloatTensor(action_).to(device)
@@ -126,80 +122,60 @@ class TD3:
             next_state = torch.FloatTensor(next_state).to(device)
             done = torch.FloatTensor(done).reshape((batch_size,1)).to(device)
 
-            # Select next action according to target policy:
-            noise = torch.FloatTensor(action_).data.normal_(0, policy_noise).to(device)
-            noise = noise.clamp(-noise_clip, noise_clip)
-            next_action = (self.actor_target(next_state) + noise)
-            next_action = next_action.clamp(-self.max_action, self.max_action)
+            ####################
+            # Actor Loss
+            ####################
+            actor_loss = -self.critic(state, self.actor(state)).mean()
 
-            # Compute target Q-value:
-            target_Q1 = self.critic_1_target(next_state, next_action)
-            target_Q2 = self.critic_2_target(next_state, next_action)
-            target_Q = torch.min(target_Q1, target_Q2)
+            ####################
+            # Critic Loss
+            ####################
+            # Select next action according to target actor with noise:
+            next_action = (self.actor_target(next_state)).clamp(-self.max_action, self.max_action)
+
+            # target Q-value
+            target_Q = self.critic_target(next_state, next_action)
             target_Q = reward + ((1-done) * gamma * target_Q).detach()
 
-            # Optimize Critic 1:
-            current_Q1 = self.critic_1(state, action)
-            loss_Q1 = F.mse_loss(current_Q1, target_Q)
-            self.critic_1_optimizer.zero_grad()
+            # current Q-value
+            current_Q = self.critic(state, action)
+            loss_Q1 = F.mse_loss(current_Q, target_Q)
+
+            ####################
+            # Optimization
+            ####################
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
+
+            self.critic_optimizer.zero_grad()
             loss_Q1.backward()
-            self.critic_1_optimizer.step()
+            self.critic_optimizer.step()
 
-            # Optimize Critic 2:
-            current_Q2 = self.critic_2(state, action)
-            loss_Q2 = F.mse_loss(current_Q2, target_Q)
-            self.critic_2_optimizer.zero_grad()
-            loss_Q2.backward()
-            self.critic_2_optimizer.step()
+            ####################
+            # Polyak averaging update
+            ####################
+            for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                target_param.data.copy_( (polyak * target_param.data) + ((1-polyak) * param.data))
 
-            # Delayed policy updates:
-            if self.update_t % policy_delay == 0:
-                # Compute actor loss:
-                actor_loss = -self.critic_1(state, self.actor(state)).mean()
-
-                # Optimize the actor
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                self.actor_optimizer.step()
-
-                # Polyak averaging update:
-                for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-                    target_param.data.copy_( (polyak * target_param.data) + ((1-polyak) * param.data))
-
-                for param, target_param in zip(self.critic_1.parameters(), self.critic_1_target.parameters()):
-                    target_param.data.copy_( (polyak * target_param.data) + ((1-polyak) * param.data))
-
-                for param, target_param in zip(self.critic_2.parameters(), self.critic_2_target.parameters()):
-                    target_param.data.copy_( (polyak * target_param.data) + ((1-polyak) * param.data))
-
-                self.update_t += 1
+            for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+                target_param.data.copy_( (polyak * target_param.data) + ((1-polyak) * param.data))
                     
                 
     def save(self, checkpoint_path):
         torch.save(self.actor.state_dict(), checkpoint_path+'_actor.pth')
         torch.save(self.actor_target.state_dict(), checkpoint_path+'_actor_target.pth')
         
-        torch.save(self.critic_1.state_dict(), checkpoint_path+'_crtic_1.pth')
-        torch.save(self.critic_1_target.state_dict(), checkpoint_path+'_critic_1_target.pth')
-        
-        torch.save(self.critic_2.state_dict(), checkpoint_path+'_crtic_2.pth')
-        torch.save(self.critic_2_target.state_dict(), checkpoint_path+'_critic_2_target.pth')
+        torch.save(self.critic.state_dict(), checkpoint_path+'_crtic.pth')
+        torch.save(self.critic_target.state_dict(), checkpoint_path+'_critic_target.pth')
         
     def load(self, checkpoint_path):
         self.actor.load_state_dict(torch.load(checkpoint_path+'_actor.pth', map_location=lambda storage, loc: storage))
         self.actor_target.load_state_dict(torch.load(checkpoint_path+'_actor_target.pth', map_location=lambda storage, loc: storage))
         
-        self.critic_1.load_state_dict(torch.load(checkpoint_path+'_crtic_1.pth', map_location=lambda storage, loc: storage))
-        self.critic_1_target.load_state_dict(torch.load(checkpoint_path+'_critic_1_target.pth', map_location=lambda storage, loc: storage))
-        
-        self.critic_2.load_state_dict(torch.load(checkpoint_path+'_crtic_2.pth', map_location=lambda storage, loc: storage))
-        self.critic_2_target.load_state_dict(torch.load(checkpoint_path+'_critic_2_target.pth', map_location=lambda storage, loc: storage))
+        self.critic.load_state_dict(torch.load(checkpoint_path+'_crtic.pth', map_location=lambda storage, loc: storage))
+        self.critic_target.load_state_dict(torch.load(checkpoint_path+'_critic_target.pth', map_location=lambda storage, loc: storage))
         
     def load_actor(self, checkpoint_path):
         self.actor.load_state_dict(torch.load(checkpoint_path+'_actor.pth', map_location=lambda storage, loc: storage))
         self.actor_target.load_state_dict(torch.load(checkpoint_path+'_actor_target.pth', map_location=lambda storage, loc: storage))
-        
-        
-        
-      
-        

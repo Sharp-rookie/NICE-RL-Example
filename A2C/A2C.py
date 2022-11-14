@@ -20,9 +20,9 @@ print("=========================================================================
 
 
 ########################### Monte Carlo法估计动作价值 ###########################
-def compute_returns(rewards, is_terminals, gamma=0.99):
+def compute_returns(next_value, rewards, is_terminals, gamma=0.99):
     
-    R = 0
+    R = next_value
     returns = []
     for step in reversed(range(len(rewards))):
         R = rewards[step] + gamma * R * (1-int(is_terminals[step]))
@@ -31,21 +31,23 @@ def compute_returns(rewards, is_terminals, gamma=0.99):
     return returns
 
 
-################################## PPO Policy ##################################
+################################## A2C Policy ##################################
 class Memory:
     def __init__(self):
         self.actions = []
-        self.states = []
-        self.logprobs = [] # log[p(a_t|s_t)]，用于计算重要性因子
+        self.logprobs = []
         self.rewards = []
+        self.state_values = [] # PPO 不需要存current critic的状态价值，因为更新时会用target critic现场计算状态价值
         self.is_terminals = []
+        self.entropy = 0
     
     def clear(self):
         del self.actions[:]
-        del self.states[:]
         del self.logprobs[:]
         del self.rewards[:]
+        del self.state_values[:]
         del self.is_terminals[:]
+        self.entropy = 0
 
 def init_weights(m):
     if isinstance(m, (torch.nn.Linear, torch.nn.Conv1d, torch.nn.Conv2d)):
@@ -92,8 +94,10 @@ class ActorCritic(nn.Module):
         self.apply(init_weights)
         
     def set_action_std(self, new_action_std):
+
         if self.has_continuous_action_space:
             self.action_var = torch.full((self.action_dim,), new_action_std * new_action_std).to(device)
+        
         else: # 只有连续动作才有概率分布，从而才有方差；离散动作只有自身的绝对概率值
             print("--------------------------------------------------------------------------------------------")
             print("WARNING : Calling ActorCritic::set_action_std() on discrete action space policy")
@@ -103,48 +107,33 @@ class ActorCritic(nn.Module):
         raise NotImplementedError
     
     def act(self, state):
-        """执行act与环境交互的的是 agent'，也就是θ’而不是θ"""
-
+        """决策"""
+        
         if self.has_continuous_action_space:
             action_mean = self.actor(state) # 对于策略梯度，actor网络给出的是可选动作的概率分布，在这里就是每个动作对应正态分布的均值
             cov_mat = torch.diag(self.action_var).unsqueeze(dim=0) # 每个动作的正态分布标准差
             dist = MultivariateNormal(action_mean, cov_mat) # 连续动作采用多元正态分布，目的是逐渐逼近真正的动作选择的正态分布
+        
         else:
             action_probs = self.actor(state)
             dist = Categorical(action_probs)
 
         action = dist.sample() # 从给定策略对应的动作概率分布中采样获得本次动作
         action_logprob = dist.log_prob(action) # 选择此动作对应的概率的log，用于计算重要性因子
+        action_entropy = dist.entropy() # 动作分布的熵值，用于鼓励探索
         
-        return action.detach(), action_logprob.detach()
+        return action, action_logprob, action_entropy
     
-    def evaluate(self, state, action):
-        """执行evaluate从而进行训练更新的是 agent，也就是θ"""
+    def evaluate(self, state):
+        """评估"""
 
-        if self.has_continuous_action_space:
-            action_mean = self.actor(state)
-            action_var = self.action_var.expand_as(action_mean)
-            cov_mat = torch.diag_embed(action_var).to(device)
-            dist = MultivariateNormal(action_mean, cov_mat)
-            
-            # For Single Action Environments.
-            if self.action_dim == 1:
-                action = action.reshape(-1, self.action_dim)
-        else:
-            action_probs = self.actor(state)
-            dist = Categorical(action_probs)
-        
-        action_logprobs = dist.log_prob(action)
-        dist_entropy = dist.entropy() # 动作分布的熵值，用于鼓励探索
         state_values = self.critic(state)
-        
-        return action_logprobs, state_values, dist_entropy
+        return state_values
 
 
-class PPO:
-    """PPO-clip算法"""
+class A2C:
 
-    def __init__(self, state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip, has_continuous_action_space, action_std_init=0.6):
+    def __init__(self, state_dim, action_dim, lr_actor, lr_critic, gamma, has_continuous_action_space, action_std_init=0.6):
 
         self.has_continuous_action_space = has_continuous_action_space
 
@@ -152,9 +141,6 @@ class PPO:
             self.action_std = action_std_init
 
         self.gamma = gamma
-        self.eps_clip = eps_clip
-        self.K_epochs = K_epochs
-        
         self.memory = Memory()
 
         # 用于训练学习的agent θ
@@ -163,10 +149,6 @@ class PPO:
                         {'params': self.policy.actor.parameters(), 'lr': lr_actor},
                         {'params': self.policy.critic.parameters(), 'lr': lr_critic}
                     ])
-
-        # 用于与环境交互的agent θ’
-        self.policy_old = ActorCritic(state_dim, action_dim, has_continuous_action_space, action_std_init).to(device)
-        self.policy_old.load_state_dict(self.policy.state_dict())
         
         self.MseLoss = nn.MSELoss()
 
@@ -174,15 +156,14 @@ class PPO:
         if self.has_continuous_action_space:
             self.action_std = new_action_std
             self.policy.set_action_std(new_action_std)
-            self.policy_old.set_action_std(new_action_std)
         else:
             print("--------------------------------------------------------------------------------------------")
             print("WARNING : Calling PPO::set_action_std() on discrete action space policy")
             print("--------------------------------------------------------------------------------------------")
 
     def decay_action_std(self, action_std_decay_rate, min_action_std):
-        """连续动作的正态分布标准差衰减
-        """
+        """连续动作的正态分布标准差衰减"""
+
         print("--------------------------------------------------------------------------------------------")
         if self.has_continuous_action_space:
             self.action_std = self.action_std - action_std_decay_rate
@@ -199,70 +180,50 @@ class PPO:
         print("--------------------------------------------------------------------------------------------")
 
     def select_action(self, state):
-        """agent θ’ 与环境交互，选择动作并计入memory"""
+        """agent与环境交互，选择动作并计入memory"""
 
-        with torch.no_grad():
-            state = torch.FloatTensor(state).to(device)
-            action, action_logprob = self.policy_old.act(state)
+        state = torch.FloatTensor(state).to(device)
+        action, action_logprob, action_entropy = self.policy.act(state)
 
-        self.memory.states.append(state)
         self.memory.actions.append(action)
         self.memory.logprobs.append(action_logprob)
+        self.memory.entropy += action_entropy
+        self.memory.state_values.append(self.policy.evaluate(state))
+
+        return action.cpu().numpy().flatten() if self.has_continuous_action_space else action.item()
+
+    def update(self, next_state):
+        """agent利用观测内容训练更新参数"""
+
+        # 蒙特卡洛法计算动作价值
+        next_state = torch.FloatTensor(next_state).to(device)
+        next_value = self.policy.evaluate(next_state)
+        action_values = compute_returns(next_value, self.memory.rewards, self.memory.is_terminals)
         
-        return action.detach().cpu().numpy().flatten() if self.has_continuous_action_space else action.item()
-
-    def update(self):
-        """agent θ 利用观测内容训练更新 θ 参数"""
-
-        # Monte Carlo法 估计动作价值 action_values
-        action_values = compute_returns(self.memory.rewards, self.memory.is_terminals, self.gamma)
             
         # Normalizing the action_values
         action_values = torch.tensor(action_values, dtype=torch.float32).to(device)
         action_values = (action_values - action_values.mean()) / (action_values.std() + 1e-7)
 
         # Convert list to tensor
-        old_states = torch.squeeze(torch.stack(self.memory.states, dim=0)).detach().to(device)
-        old_actions = torch.squeeze(torch.stack(self.memory.actions, dim=0)).detach().to(device)
-        old_logprobs = torch.squeeze(torch.stack(self.memory.logprobs, dim=0)).detach().to(device)
+        logprobs = torch.squeeze(torch.stack(self.memory.logprobs, dim=0)).to(device)
 
-        # agent θ’与环境交互一波后，agent θ 用获取的memory数据训练更新 K 轮
-        for _ in range(self.K_epochs):
+        state_values = torch.FloatTensor(self.memory.state_values).to(device)
+        advantages = action_values - state_values
+        actor_loss  = -(logprobs * advantages.detach()).mean()
+        critic_loss = self.MseLoss(state_values, action_values).mean()
 
-            # Evaluating old actions and values
-            logprobs, state_values, dist_entropy = self.policy.evaluate(old_states, old_actions)
+        loss = actor_loss + 0.5 * critic_loss - 0.001 * self.memory.entropy
 
-            # match state_values tensor dimensions with rewards tensor
-            state_values = torch.squeeze(state_values)
-            
-            # 计算重要性因子 (pi_theta / pi_theta__old)
-            ratios = torch.exp(logprobs - old_logprobs.detach())
-
-            # 按PPO-clip的公式计算策略梯度
-            advantages = action_values - state_values.detach()   
-            surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1-self.eps_clip, 1+self.eps_clip) * advantages
-
-            actor_loss  = - torch.min(surr1, surr2)
-            critic_loss = self.MseLoss(state_values, action_values)
-
-            # 总loss = Actor网络的策略梯度 + Critic网络的MSE损失 + Actor选择动作的熵值（鼓励探索）
-            loss = actor_loss + 0.5*critic_loss - 0.001*dist_entropy
-            
-            # take gradient step
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
-            
-        # Copy new weights into old policy
-        self.policy_old.load_state_dict(self.policy.state_dict())
+        self.optimizer.zero_grad()
+        loss.mean().backward()
+        self.optimizer.step()
 
         # clear memory
         self.memory.clear()
     
     def save(self, checkpoint_path):
-        torch.save(self.policy_old.state_dict(), checkpoint_path)
+        torch.save(self.policy.state_dict(), checkpoint_path)
    
     def load(self, checkpoint_path):
-        self.policy_old.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))
         self.policy.load_state_dict(torch.load(checkpoint_path, map_location=lambda storage, loc: storage))

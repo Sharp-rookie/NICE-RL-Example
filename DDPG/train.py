@@ -3,7 +3,7 @@ import torch
 import gym
 import numpy as np
 
-from TD3 import TD3, ReplayBuffer
+from DDPG import DDPG, ReplayBuffer
 
 def train():
     ######### Hyperparameters #########
@@ -19,9 +19,6 @@ def train():
     exploration_noise_decay_step = 0.05      # linearly decay action_noise
     exploration_noise_decay_interval = 50   # action noise decay interval
     polyak = 0.995              # target policy update parameter (1-tau)
-    policy_noise = 0.2          # target policy smoothing noise
-    noise_clip = 0.5
-    policy_delay = 2            # delayed policy updates parameter
     max_episodes = 1000         # max num of episodes
     max_timesteps = 500        # max timesteps in one episode
     checkpoint_path = "./preTrained/{}/".format(env_name) # save trained models
@@ -35,7 +32,7 @@ def train():
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0])
     
-    policy = TD3(lr, state_dim, action_dim, max_action)
+    policy = DDPG(lr, state_dim, action_dim, max_action)
     replay_buffer = ReplayBuffer(max_timesteps*10)
     
     if random_seed:
@@ -69,14 +66,14 @@ def train():
             ep_reward += reward
             
             # if time_steps >= batch_size:
-            #     policy.update(replay_buffer, batch_size, gamma, polyak, policy_noise, noise_clip, policy_delay)
+            #     policy.update(replay_buffer, batch_size, gamma, polyak)
             
             time_steps += 1
 
             if done:
                 break
         
-        policy.update(replay_buffer, t, batch_size, gamma, polyak, policy_noise, noise_clip, policy_delay)
+        policy.update(replay_buffer, t, batch_size, gamma, polyak)
         
         # logging updates:
         log_f.write('{},{},{}\n'.format(episode, time_steps, ep_reward))

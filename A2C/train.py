@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from datetime import datetime
 
-from PPO import PPO
+from A2C import A2C
 
 
 def train():
@@ -16,7 +16,7 @@ def train():
     has_continuous_action_space = True  # continuous action space; else discrete
 
     max_episode_timesteps = 500        # max timesteps in one episode
-    max_training_timesteps = max_episode_timesteps*1000   # break training loop if timeteps > max_training_timesteps
+    max_training_timesteps = max_episode_timesteps * 1000   # break training loop if timeteps > max_training_timesteps
 
     # 打印日志、保存网络权重的频率
     print_freq = max_episode_timesteps * 10   # print avg reward in the interval (in num timesteps)
@@ -30,8 +30,7 @@ def train():
     action_std_decay_freq = max_episode_timesteps*100  # action_std decay frequency (in num timesteps)
     #####################################################
 
-    ################ PPO hyperparameters ################
-    eps_clip = 0.2          # clip parameter for PPO
+    ################ A2C hyperparameters ################
     gamma = 0.99            # discount factor
 
     # agent θ' 与环境每交互若干轮，agent θ就训练多次
@@ -39,7 +38,6 @@ def train():
     # 这是因为更新时需要用蒙特卡洛法迭代计算动作价值，而如果环境是永不停止的那种，即没有termial，那么如果探索多轮后放一起迭代会导致
     # 每轮数据间没有terminal状态隔开，进行连续迭代而没有中断，从原理上导致动作价值计算错误！！！
     update_timestep = max_episode_timesteps * 4    # update policy every n timesteps
-    K_epochs = 80                                  # update policy for K epochs in one PPO update
 
     lr_actor = 0.001       # learning rate for actor network
     lr_critic = 0.001       # learning rate for critic network
@@ -63,7 +61,7 @@ def train():
     ###################### logging ######################
 
     #### log files for multiple runs are NOT overwritten
-    log_dir = "PPO_logs"
+    log_dir = "A2C_logs"
     if not os.path.exists(log_dir):
           os.makedirs(log_dir)
 
@@ -77,7 +75,7 @@ def train():
     run_num = len(current_num_files)
 
     #### create new log file for each run
-    log_f_name = log_dir + '/PPO_' + env_name + "_log_" + str(run_num) + ".csv"
+    log_f_name = log_dir + '/A2C_' + env_name + "_log_" + str(run_num) + ".csv"
 
     print("current logging run number for " + env_name + " : ", run_num)
     print("logging at : " + log_f_name)
@@ -86,7 +84,7 @@ def train():
     ################### checkpointing ###################
     run_num_pretrained = 0      #### change this to prevent overwriting weights in same env_name folder
 
-    directory = "PPO_preTrained"
+    directory = "A2C_preTrained"
     if not os.path.exists(directory):
           os.makedirs(directory)
 
@@ -94,7 +92,7 @@ def train():
     if not os.path.exists(directory):
           os.makedirs(directory)
 
-    checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
+    checkpoint_path = directory + "A2C_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
     print("save checkpoint path : " + checkpoint_path)
     #####################################################
 
@@ -120,9 +118,7 @@ def train():
     else:
         print("Initializing a discrete action space policy")
     print("--------------------------------------------------------------------------------------------")
-    print("PPO update frequency : " + str(update_timestep) + " timesteps")
-    print("PPO K epochs : ", K_epochs)
-    print("PPO epsilon clip : ", eps_clip)
+    print("A2C update frequency : " + str(update_timestep) + " timesteps")
     print("discount factor (gamma) : ", gamma)
     print("--------------------------------------------------------------------------------------------")
     print("optimizer learning rate actor : ", lr_actor)
@@ -139,8 +135,8 @@ def train():
 
     ################# training procedure ################
 
-    # initialize a PPO agent
-    ppo_agent = PPO(state_dim, action_dim, lr_actor, lr_critic, gamma, K_epochs, eps_clip, has_continuous_action_space, action_std)
+    # initialize a A2C agent
+    a2c_agent = A2C(state_dim, action_dim, lr_actor, lr_critic, gamma, has_continuous_action_space, action_std)
 
     # track total training time
     start_time = datetime.now().replace(microsecond=0)
@@ -170,23 +166,23 @@ def train():
         for t in range(1, max_episode_timesteps+1):
 
             # select action with policy
-            action = ppo_agent.select_action(state)
+            action = a2c_agent.select_action(state)
             state, reward, done, _ = env.step(action)
 
             # saving reward and is_terminals
-            ppo_agent.memory.rewards.append(reward)
-            ppo_agent.memory.is_terminals.append(done)
+            a2c_agent.memory.rewards.append(reward)
+            a2c_agent.memory.is_terminals.append(done)
 
             time_step +=1
             current_ep_reward += reward
 
-            # update PPO agent
+            # update A2C agent
             if time_step % update_timestep == 0:
-                ppo_agent.update()
+                a2c_agent.update(state)
 
             # if continuous action space; then decay action std of ouput action distribution
             if has_continuous_action_space and time_step % action_std_decay_freq == 0:
-                ppo_agent.decay_action_std(action_std_decay_rate, min_action_std)
+                a2c_agent.decay_action_std(action_std_decay_rate, min_action_std)
 
             # log in logging file
             if time_step % log_freq == 0:
@@ -215,10 +211,10 @@ def train():
 
             # save model weights
             if time_step % save_model_freq == 0:
-                checkpoint_path = directory + "PPO_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
+                checkpoint_path = directory + "A2C_{}_{}_{}.pth".format(env_name, random_seed, run_num_pretrained)
                 print("--------------------------------------------------------------------------------------------")
                 print("saving model at : " + checkpoint_path)
-                ppo_agent.save(checkpoint_path)
+                a2c_agent.save(checkpoint_path)
                 print("model saved")
                 print("Elapsed Time  : ", datetime.now().replace(microsecond=0) - start_time)
                 print("--------------------------------------------------------------------------------------------")
@@ -250,10 +246,3 @@ def train():
 if __name__ == '__main__':
 
     train()
-    
-    
-    
-    
-    
-    
-    
