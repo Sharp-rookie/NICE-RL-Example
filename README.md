@@ -11,7 +11,7 @@
 | DDPG        | PG  \|  off-policy | Yes    | Yes  | Yes  | 评价是，不如 TD3           |
 | TD3         | PG  \|  off-policy | Yes    | Yes  | Yes  | 训练慢，难调参             |
 | PPO         | PG  \|  on-policy  | No     | Yes  | Yes  | 训练快，好调参，效果好     |
-| SAC         | PG  \|off-policy   | No     | Yes  | Yes  |                            |
+| SAC         | PG  \|off-policy   | No     | Yes  | Yes  | 可能比TD3还难训            |
 
 
 
