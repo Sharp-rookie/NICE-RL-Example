@@ -75,6 +75,8 @@ def train():
 
             if done:
                 break
+
+            env.render()
         
         policy.update(replay_buffer, t, batch_size, gamma, polyak, policy_noise, noise_clip, policy_delay)
         

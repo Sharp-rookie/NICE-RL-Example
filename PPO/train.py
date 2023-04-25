@@ -228,6 +228,8 @@ def train():
             if done:
                 break
 
+            env.render()
+
         print_running_reward += current_ep_reward
         print_running_episodes += 1
         log_running_reward += current_ep_reward
